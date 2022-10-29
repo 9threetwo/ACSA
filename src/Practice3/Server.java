@@ -1,44 +1,107 @@
 package Practice3;
 
 import java.io.*;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.*;
+import java.util.LinkedList;
 
 public class Server {
 
-    public static ServerSomthing[] serverList;
-    private static Socket clientSocket; //сокет для общения
-    private static ServerSocket server; // серверсокет
-    private static BufferedReader in; // поток чтения из сокета
-    private static BufferedWriter out; // поток записи в сокет
+    public static final int PORT = 8085;
+    public static LinkedList<ServerImpl> serverList = new LinkedList<>(); // список всех подключенных клиентов
+    public static MessageBuf messageBuf; // буфер сообщений
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
+        ServerSocket server = new ServerSocket(PORT); // передаем порт
+        messageBuf = new MessageBuf();
+        System.out.println("Server Started"); // сообщение о запуске сервера
         try {
-            try {
-                server = new ServerSocket(4004); // серверсокет прослушивает порт 4004
-                System.out.println("Сервер запущен!"); // хорошо бы серверу объявить о своем запуске
-                clientSocket = server.accept(); // accept() будет ждать пока кто-нибудь не захочет подключиться
-                try { // установив связь и воссоздав сокет для общения с клиентом можно перейти к созданию потоков ввода/вывода.
-                    // теперь мы можем принимать сообщения
-                    in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream())); // и отправлять
-                    out = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream()));
-
-                    String word = in.readLine(); // ждём пока клиент что-нибудь нам напишет
-                    System.out.println(word); // не долго думая отвечает клиенту
-                    out.write("Привет, это Сервер! Подтверждаю, вы написали : " + word + "\n");
-                    out.flush(); // выталкиваем все из буфера
-
-                } finally { // в любом случае сокет будет закрыт
-                    clientSocket.close(); // потоки тоже хорошо бы закрыть
-                    in.close();
-                    out.close();
+            Thread one = new Thread(()->{ // объявляем поток
+                while (true){
+                    if(!messageBuf.isBufEmpty()){ // если буфер сообщений заполнен, то
+                        for (ServerImpl vr : Server.serverList) { // начинаем итерироваться по списку серверов
+                            try {
+                                for (ServerImpl _server : serverList ){
+                                    messageBuf.printBuf(new BufferedWriter(new OutputStreamWriter(_server.getSocket().getOutputStream()))); // выводим сообщения всем клиентам
+                                }
+                            } catch (IOException e) { //в случае чего выкидываем ошибку
+                                throw new RuntimeException(e);
+                            }
+                            finally {
+                                messageBuf.clearBuf(); // чистим буфер (выполняется в любом случае)
+                            }
+                        }
+                    }
+                    try {
+                        Thread.sleep(20000); // на сколько спит поток (раз в 20 сек отсылает весь буфер сообщений всем клиентам)
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
-            } finally {
-                System.out.println("Сервер закрыт!");
-                server.close();
+            });
+            one.start(); // запускаем поток
+            while (true) {
+                Socket socket = server.accept(); // запускаем сервер в режим принятия соединения
+                try {
+                    serverList.add(new ServerImpl(socket)); //добавляем клиента в список
+                } catch (IOException e) {
+                    socket.close(); // закрываем соединение
+                }
+            }
+        } finally {
+            server.close();
+        }
+    }
+}
+class ServerImpl extends Thread { // наследуется от класса потока, может работать асинхронно
+    private Socket socket;
+    private BufferedReader in; // входной поток
+    private BufferedWriter out; //выходной поток
+    public ServerImpl(Socket socket) throws IOException {
+        this.socket = socket;
+        in = new BufferedReader(new InputStreamReader(socket.getInputStream())); // инициализируем поток
+        out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+        Server.messageBuf.printBuf(out); // выводим список сообщений в выходной поток
+        start(); // запускаем метод run
+    }
+    @Override // метод по умолчанию потока
+    public void run() {
+        String word;
+        try {
+            while (true) {
+                word = in.readLine(); // считывается слово
+                Server.messageBuf.addBufEl(word); // добавляется в буфер
             }
         } catch (IOException e) {
-            System.err.println(e);
         }
+    }
+
+    public Socket getSocket() {
+        return socket;
+    }
+}
+// буфер сообщений
+class MessageBuf {
+    private LinkedList<String> serverBuf = new LinkedList<>(); // список сообщений
+    public void addBufEl(String el) {
+        serverBuf.add(el);
+    } // добавление элемента в буфер
+
+    public void printBuf(BufferedWriter writer) {
+        if(serverBuf.size() > 0) {
+            try {
+                for (String vr : serverBuf) { // итерируемся по буферу
+                    writer.write(vr + "\n");
+                }
+                writer.flush(); // очищаем буфер
+            } catch (IOException ignored) {}
+        }
+    }
+
+    public void clearBuf(){
+        serverBuf.clear();
+    }
+
+    public boolean isBufEmpty(){
+        return serverBuf.isEmpty();
     }
 }
